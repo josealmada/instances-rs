@@ -7,16 +7,18 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::backends::{Backend, ConnectionError};
-use crate::InstanceRole::{Follower, Leader, Unknown};
 use crate::models::{CommunicationErrorStrategy, InstanceInfo, InstanceRole, LeaderStrategy};
+use crate::InstanceRole::{Follower, Leader, Unknown};
 
-mod models;
 mod backends;
 mod daemon;
+mod models;
 
-pub struct Instances<B, T> where
+pub struct Instances<B, T>
+where
     T: Serialize + DeserializeOwned + Clone,
-    B: Backend<T> {
+    B: Backend<T>,
+{
     instance_id: Uuid,
     backend: B,
     info_extraction: fn() -> T,
@@ -27,9 +29,11 @@ pub struct Instances<B, T> where
     instances: Vec<InstanceInfo<T>>,
 }
 
-impl<B, T> Instances<B, T> where
+impl<B, T> Instances<B, T>
+where
     T: Serialize + DeserializeOwned + Clone,
-    B: Backend<T> {
+    B: Backend<T>,
+{
     pub fn get_instance_info(&self) -> &Option<InstanceInfo<T>> {
         &self.current_info
     }
@@ -56,24 +60,27 @@ impl<B, T> Instances<B, T> where
             Ok(instances) => {
                 self.instances = self.add_leadership(instances);
 
-                let current = (*self.instances.iter()
+                let current = (*self
+                    .instances
+                    .iter()
                     .find(|i| i.id == self.instance_id)
                     .unwrap())
-                    .clone();
+                .clone();
 
                 self.current_info = Some(current);
                 Ok(())
             }
-            Err(error) => {
-                match self.error_strategy {
-                    CommunicationErrorStrategy::Error => Err(error),
-                    CommunicationErrorStrategy::UseLastInfo => Ok(()),
-                }
-            }
+            Err(error) => match self.error_strategy {
+                CommunicationErrorStrategy::Error => Err(error),
+                CommunicationErrorStrategy::UseLastInfo => Ok(()),
+            },
         }
     }
 
-    fn update_instance_info_and_retrieve(&self, data: T) -> Result<Vec<(Uuid, SystemTime, T)>, ConnectionError> {
+    fn update_instance_info_and_retrieve(
+        &self,
+        data: T,
+    ) -> Result<Vec<(Uuid, SystemTime, T)>, ConnectionError> {
         self.backend.update_instance_info(self.instance_id, data)?;
         self.backend.list_active_instances()
     }
@@ -83,7 +90,8 @@ impl<B, T> Instances<B, T> where
             LeaderStrategy::None => None,
             LeaderStrategy::Oldest => instances.iter().min_by_key(|i| i.1),
             LeaderStrategy::Newest => instances.iter().max_by_key(|i| i.1),
-        }.map(|v| v.0);
+        }
+        .map(|v| v.0);
 
         let mut result = Vec::with_capacity(instances.len());
 
@@ -93,7 +101,7 @@ impl<B, T> Instances<B, T> where
                 role: self.check_leader(&leader, &i.0),
                 data: i.2,
             })
-        };
+        }
 
         result
     }
@@ -101,11 +109,16 @@ impl<B, T> Instances<B, T> where
     fn check_leader(&self, leader: &Option<Uuid>, current: &Uuid) -> InstanceRole {
         match self.leader_strategy {
             LeaderStrategy::None => Unknown,
-            _ => if *leader == Some(*current) { Leader } else { Follower },
+            _ => {
+                if *leader == Some(*current) {
+                    Leader
+                } else {
+                    Follower
+                }
+            }
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -142,12 +155,14 @@ mod tests {
         let mut backend = MockBackend::<String>::new();
         let id = Uuid::new_v4();
 
-        backend.expect_update_instance_info()
+        backend
+            .expect_update_instance_info()
             .with(eq(id), eq("data".to_string()))
             .times(1)
             .returning(|_, _| Ok(()));
 
-        backend.expect_list_active_instances()
+        backend
+            .expect_list_active_instances()
             .times(1)
             .returning(move || Ok(vec![(id, SystemTime::now(), "data".to_string())]));
 
@@ -170,7 +185,12 @@ mod tests {
 
         assert_eq!(1, instance.instances_count().unwrap());
 
-        let single_instance = instance.list_active_instances().as_ref().unwrap().first().unwrap();
+        let single_instance = instance
+            .list_active_instances()
+            .as_ref()
+            .unwrap()
+            .first()
+            .unwrap();
         assert_eq!(id, single_instance.id);
         assert_eq!(Unknown, single_instance.role);
         assert_eq!("data".to_string(), single_instance.data);
@@ -227,13 +247,116 @@ mod tests {
         assert_eq!(Follower, result.iter().find(|i| i.id == id3).unwrap().role);
     }
 
+    #[test]
+    fn should_return_old_info_after_update_failure() {
+        let mut backend = MockBackend::<String>::new();
+        let id = Uuid::new_v4();
+
+        backend
+            .expect_update_instance_info()
+            .with(eq(id), eq("data".to_string()))
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        backend
+            .expect_update_instance_info()
+            .with(eq(id), eq("data".to_string()))
+            .times(1)
+            .returning(|_, _| Err(ConnectionError::FailedToUpdate("error".to_string())));
+
+        backend
+            .expect_list_active_instances()
+            .times(1)
+            .returning(move || Ok(vec![(id, SystemTime::now(), "data".to_string())]));
+
+        let mut instance = Instances {
+            instance_id: id,
+            backend,
+            info_extraction: || "data".to_string(),
+            leader_strategy: LeaderStrategy::None,
+            error_strategy: CommunicationErrorStrategy::UseLastInfo,
+            current_info: None,
+            instances: Vec::new(),
+        };
+
+        instance.update_instance_info().unwrap();
+
+        let current = instance.get_instance_info().as_ref().unwrap();
+        assert_eq!(id, current.id);
+        assert_eq!(Unknown, current.role);
+        assert_eq!("data".to_string(), current.data);
+
+        instance.update_instance_info().unwrap();
+
+        let current = instance.get_instance_info().as_ref().unwrap();
+        assert_eq!(id, current.id);
+        assert_eq!(Unknown, current.role);
+        assert_eq!("data".to_string(), current.data);
+    }
+
+    #[test]
+    fn should_return_error_after_update_failure() {
+        let mut backend = MockBackend::<String>::new();
+        let id = Uuid::new_v4();
+
+        backend
+            .expect_update_instance_info()
+            .with(eq(id), eq("data".to_string()))
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        backend
+            .expect_update_instance_info()
+            .with(eq(id), eq("data".to_string()))
+            .times(1)
+            .returning(|_, _| Err(ConnectionError::FailedToUpdate("error".to_string())));
+
+        backend
+            .expect_list_active_instances()
+            .times(1)
+            .returning(move || Ok(vec![(id, SystemTime::now(), "data".to_string())]));
+
+        let mut instance = Instances {
+            instance_id: id,
+            backend,
+            info_extraction: || "data".to_string(),
+            leader_strategy: LeaderStrategy::None,
+            error_strategy: CommunicationErrorStrategy::Error,
+            current_info: None,
+            instances: Vec::new(),
+        };
+
+        instance.update_instance_info().unwrap();
+
+        let current = instance.get_instance_info().as_ref().unwrap();
+        assert_eq!(id, current.id);
+        assert_eq!(Unknown, current.role);
+        assert_eq!("data".to_string(), current.data);
+
+        let result = instance.update_instance_info();
+
+        assert_eq!(
+            Err(ConnectionError::FailedToUpdate("error".to_string())),
+            result
+        )
+    }
+
     fn mock_data_for(ids: Vec<Uuid>) -> Vec<(Uuid, SystemTime, String)> {
-        ids.iter().enumerate()
-            .map(|(i, id)| (*id, SystemTime::now().add(Duration::from_secs(i as u64)), "data".to_string()))
+        ids.iter()
+            .enumerate()
+            .map(|(i, id)| {
+                (
+                    *id,
+                    SystemTime::now().add(Duration::from_secs(i as u64)),
+                    "data".to_string(),
+                )
+            })
             .collect()
     }
 
-    fn instance_service_for(leader_strategy: LeaderStrategy) -> Instances<MockBackend<String>, String> {
+    fn instance_service_for(
+        leader_strategy: LeaderStrategy,
+    ) -> Instances<MockBackend<String>, String> {
         Instances {
             instance_id: Uuid::new_v4(),
             backend: MockBackend::<String>::new(),

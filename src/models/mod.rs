@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(PartialEq, Debug)]
@@ -23,7 +23,10 @@ pub enum InstanceRole {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct InstanceInfo<T> where T: Serialize + DeserializeOwned + Clone {
+pub struct InstanceInfo<T>
+where
+    T: Serialize + DeserializeOwned + Clone,
+{
     pub id: Uuid,
     pub role: InstanceRole,
     #[serde(deserialize_with = "T::deserialize")]

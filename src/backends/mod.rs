@@ -11,7 +11,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 #[cfg_attr(test, automock)]
-pub trait Backend<T> where T: Serialize + DeserializeOwned {
+pub trait Backend<T>
+where
+    T: Serialize + DeserializeOwned,
+{
     fn update_instance_info(&self, instance_id: Uuid, data: T) -> Result<(), ConnectionError>;
     fn list_active_instances(&self) -> Result<Vec<(Uuid, SystemTime, T)>, ConnectionError>;
 }
@@ -27,13 +30,13 @@ pub enum BackendType {
     Redis,
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, PartialEq, Debug)]
 pub enum BackendError {
     #[error(r#"Backend implementation '{0}' not found. The avaliable options are: Memory, MySQL (feature = "backend-mysql"), DynamoDB (feature = "backend-dynamodb") or Redis (feature = "backend-redis")."#)]
-    BackendNotFound(String)
+    BackendNotFound(String),
 }
 
-#[derive(Error, Debug)]
+#[derive(Error, PartialEq, Debug)]
 pub enum ConnectionError {
     #[error(r#"Failed to update instance info. Cause: {0}"#)]
     FailedToUpdate(String),
