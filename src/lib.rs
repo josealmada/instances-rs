@@ -8,17 +8,17 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::backends::{Backend, ConnectionError};
-use crate::InstanceRole::{Follower, Leader, Unknown};
 use crate::models::{CommunicationErrorStrategy, InstanceInfo, InstanceRole, LeaderStrategy};
+use crate::InstanceRole::{Follower, Leader, Unknown};
 
 mod backends;
 mod daemon;
 mod models;
 
 pub struct Instances<B, T>
-    where
-        T: Serialize + DeserializeOwned + Clone + 'static,
-        B: Backend<T> + Send + Sync + 'static,
+where
+    T: Serialize + DeserializeOwned + Clone + 'static,
+    B: Backend<T> + Send + Sync + 'static,
 {
     instance_id: Uuid,
     backend: Arc<B>,
@@ -30,17 +30,17 @@ pub struct Instances<B, T>
 }
 
 struct InstancesState<T>
-    where
-        T: Serialize + DeserializeOwned + Clone + 'static
+where
+    T: Serialize + DeserializeOwned + Clone + 'static,
 {
     current_info: Arc<Option<InstanceInfo<T>>>,
     instances: Arc<Vec<InstanceInfo<T>>>,
 }
 
 impl<B, T> Instances<B, T>
-    where
-        T: Serialize + DeserializeOwned + Clone + 'static,
-        B: Backend<T> + Send + Sync + 'static,
+where
+    T: Serialize + DeserializeOwned + Clone + 'static,
+    B: Backend<T> + Send + Sync + 'static,
 {
     pub fn get_instance_info(&self) -> Arc<Option<InstanceInfo<T>>> {
         let guard = self.state.read().unwrap();
@@ -71,11 +71,8 @@ impl<B, T> Instances<B, T>
             Ok(instances) => {
                 let instances = self.add_leadership(instances);
 
-                let current = (*instances
-                    .iter()
-                    .find(|i| i.id == self.instance_id)
-                    .unwrap())
-                    .clone();
+                let current =
+                    (*instances.iter().find(|i| i.id == self.instance_id).unwrap()).clone();
 
                 *self.state.write().unwrap() = InstancesState {
                     instances: Arc::new(instances),
@@ -104,7 +101,7 @@ impl<B, T> Instances<B, T>
             LeaderStrategy::Oldest => instances.iter().min_by_key(|i| i.1),
             LeaderStrategy::Newest => instances.iter().max_by_key(|i| i.1),
         }
-            .map(|v| v.0);
+        .map(|v| v.0);
 
         let mut result = Vec::with_capacity(instances.len());
 
