@@ -2,14 +2,28 @@ use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(PartialEq, Debug)]
+pub enum LeaderStrategy {
+    None,
+    Oldest,
+    Newest,
+}
+
+#[derive(PartialEq, Debug)]
+pub enum CommunicationErrorStrategy {
+    Error,
+    UseLastInfo,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 pub enum InstanceRole {
     Leader,
     Follower,
+    Unknown,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct InstanceInfo<T> where T: Serialize + DeserializeOwned {
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct InstanceInfo<T> where T: Serialize + DeserializeOwned + Clone {
     pub id: Uuid,
     pub role: InstanceRole,
     #[serde(deserialize_with = "T::deserialize")]

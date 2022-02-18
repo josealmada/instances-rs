@@ -1,20 +1,19 @@
-mod memory;
-
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use std::time::SystemTime;
 
-use serde::Serialize;
+#[cfg(test)]
+use mockall::{automock, predicate::*};
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use thiserror::Error;
+use uuid::Uuid;
 
-use crate::models::InstanceInfo;
-
+#[cfg_attr(test, automock)]
 pub trait Backend<T> where T: Serialize + DeserializeOwned {
-    fn update_instance_info(&self, info: InstanceInfo<T>);
-    fn get_instance_info(&self) -> InstanceInfo<T>;
-    fn instances_count(&self) -> usize;
-    fn list_active_instances(&self) -> Vec<Box<InstanceInfo<T>>>;
+    fn update_instance_info(&self, instance_id: Uuid, data: T) -> Result<(), ConnectionError>;
+    fn list_active_instances(&self) -> Result<Vec<(Uuid, SystemTime, T)>, ConnectionError>;
 }
 
 #[derive(Debug)]
@@ -32,6 +31,14 @@ pub enum BackendType {
 pub enum BackendError {
     #[error(r#"Backend implementation '{0}' not found. The avaliable options are: Memory, MySQL (feature = "backend-mysql"), DynamoDB (feature = "backend-dynamodb") or Redis (feature = "backend-redis")."#)]
     BackendNotFound(String)
+}
+
+#[derive(Error, Debug)]
+pub enum ConnectionError {
+    #[error(r#"Failed to update instance info. Cause: {0}"#)]
+    FailedToUpdate(String),
+    #[error(r#"Failed to retrieve instances info. Cause: {0}"#)]
+    FailedToRetrieve(String),
 }
 
 impl Display for BackendType {
