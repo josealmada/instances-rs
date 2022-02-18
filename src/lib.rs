@@ -1,5 +1,6 @@
 extern crate core;
 
+use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
 use serde::de::DeserializeOwned;
@@ -7,67 +8,79 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::backends::{Backend, ConnectionError};
-use crate::models::{CommunicationErrorStrategy, InstanceInfo, InstanceRole, LeaderStrategy};
 use crate::InstanceRole::{Follower, Leader, Unknown};
+use crate::models::{CommunicationErrorStrategy, InstanceInfo, InstanceRole, LeaderStrategy};
 
 mod backends;
 mod daemon;
 mod models;
 
 pub struct Instances<B, T>
-where
-    T: Serialize + DeserializeOwned + Clone,
-    B: Backend<T>,
+    where
+        T: Serialize + DeserializeOwned + Clone + 'static,
+        B: Backend<T> + Send + Sync + 'static,
 {
     instance_id: Uuid,
-    backend: B,
+    backend: Arc<B>,
     info_extraction: fn() -> T,
     leader_strategy: LeaderStrategy,
     error_strategy: CommunicationErrorStrategy,
 
-    current_info: Option<InstanceInfo<T>>,
-    instances: Vec<InstanceInfo<T>>,
+    state: Arc<RwLock<InstancesState<T>>>,
+}
+
+struct InstancesState<T>
+    where
+        T: Serialize + DeserializeOwned + Clone + 'static
+{
+    current_info: Arc<Option<InstanceInfo<T>>>,
+    instances: Arc<Vec<InstanceInfo<T>>>,
 }
 
 impl<B, T> Instances<B, T>
-where
-    T: Serialize + DeserializeOwned + Clone,
-    B: Backend<T>,
+    where
+        T: Serialize + DeserializeOwned + Clone + 'static,
+        B: Backend<T> + Send + Sync + 'static,
 {
-    pub fn get_instance_info(&self) -> &Option<InstanceInfo<T>> {
-        &self.current_info
+    pub fn get_instance_info(&self) -> Arc<Option<InstanceInfo<T>>> {
+        let guard = self.state.read().unwrap();
+        guard.current_info.clone()
     }
 
     pub fn instances_count(&self) -> Option<usize> {
-        match self.instances.len() {
+        let guard = self.state.read().unwrap();
+        match guard.instances.len() {
             0 => None,
             len => Some(len),
         }
     }
 
-    pub fn list_active_instances(&self) -> Option<&Vec<InstanceInfo<T>>> {
-        match self.instances.len() {
+    pub fn list_active_instances(&self) -> Option<Arc<Vec<InstanceInfo<T>>>> {
+        let guard = self.state.read().unwrap();
+        match guard.instances.len() {
             0 => None,
-            _ => Some(&self.instances),
+            _ => Some(guard.instances.clone()),
         }
     }
 
-    fn update_instance_info(&mut self) -> Result<(), ConnectionError> {
+    fn update_instance_info(&self) -> Result<(), ConnectionError> {
         let data = (self.info_extraction)();
         let instances = self.update_instance_info_and_retrieve(data);
 
         match instances {
             Ok(instances) => {
-                self.instances = self.add_leadership(instances);
+                let instances = self.add_leadership(instances);
 
-                let current = (*self
-                    .instances
+                let current = (*instances
                     .iter()
                     .find(|i| i.id == self.instance_id)
                     .unwrap())
-                .clone();
+                    .clone();
 
-                self.current_info = Some(current);
+                *self.state.write().unwrap() = InstancesState {
+                    instances: Arc::new(instances),
+                    current_info: Arc::new(Some(current)),
+                };
                 Ok(())
             }
             Err(error) => match self.error_strategy {
@@ -91,7 +104,7 @@ where
             LeaderStrategy::Oldest => instances.iter().min_by_key(|i| i.1),
             LeaderStrategy::Newest => instances.iter().max_by_key(|i| i.1),
         }
-        .map(|v| v.0);
+            .map(|v| v.0);
 
         let mut result = Vec::with_capacity(instances.len());
 
@@ -122,7 +135,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Add;
+    use std::ops::{Add, Deref};
     use std::time::Duration;
 
     use mockall::predicate::eq;
@@ -137,12 +150,11 @@ mod tests {
 
         let instance = Instances {
             instance_id: Uuid::new_v4(),
-            backend,
+            backend: Arc::new(backend),
             info_extraction: || "data".to_string(),
             leader_strategy: LeaderStrategy::None,
             error_strategy: CommunicationErrorStrategy::Error,
-            current_info: None,
-            instances: Vec::new(),
+            state: new_state(),
         };
 
         assert!(instance.get_instance_info().is_none());
@@ -166,31 +178,23 @@ mod tests {
             .times(1)
             .returning(move || Ok(vec![(id, SystemTime::now(), "data".to_string())]));
 
-        let mut instance = Instances {
+        let instance = Instances {
             instance_id: id,
-            backend,
+            backend: Arc::new(backend),
             info_extraction: || "data".to_string(),
             leader_strategy: LeaderStrategy::None,
             error_strategy: CommunicationErrorStrategy::Error,
-            current_info: None,
-            instances: Vec::new(),
+            state: new_state(),
         };
 
         instance.update_instance_info().unwrap();
 
-        let current = instance.get_instance_info().as_ref().unwrap();
-        assert_eq!(id, current.id);
-        assert_eq!(Unknown, current.role);
-        assert_eq!("data".to_string(), current.data);
+        validate(instance.get_instance_info(), id, Unknown);
 
         assert_eq!(1, instance.instances_count().unwrap());
 
-        let single_instance = instance
-            .list_active_instances()
-            .as_ref()
-            .unwrap()
-            .first()
-            .unwrap();
+        let instances = instance.list_active_instances().unwrap();
+        let single_instance = instances.deref().first().unwrap();
         assert_eq!(id, single_instance.id);
         assert_eq!(Unknown, single_instance.role);
         assert_eq!("data".to_string(), single_instance.data);
@@ -269,29 +273,22 @@ mod tests {
             .times(1)
             .returning(move || Ok(vec![(id, SystemTime::now(), "data".to_string())]));
 
-        let mut instance = Instances {
+        let instance = Instances {
             instance_id: id,
-            backend,
+            backend: Arc::new(backend),
             info_extraction: || "data".to_string(),
             leader_strategy: LeaderStrategy::None,
             error_strategy: CommunicationErrorStrategy::UseLastInfo,
-            current_info: None,
-            instances: Vec::new(),
+            state: new_state(),
         };
 
         instance.update_instance_info().unwrap();
 
-        let current = instance.get_instance_info().as_ref().unwrap();
-        assert_eq!(id, current.id);
-        assert_eq!(Unknown, current.role);
-        assert_eq!("data".to_string(), current.data);
+        validate(instance.get_instance_info(), id, Unknown);
 
         instance.update_instance_info().unwrap();
 
-        let current = instance.get_instance_info().as_ref().unwrap();
-        assert_eq!(id, current.id);
-        assert_eq!(Unknown, current.role);
-        assert_eq!("data".to_string(), current.data);
+        validate(instance.get_instance_info(), id, Unknown);
     }
 
     #[test]
@@ -316,22 +313,18 @@ mod tests {
             .times(1)
             .returning(move || Ok(vec![(id, SystemTime::now(), "data".to_string())]));
 
-        let mut instance = Instances {
+        let instance = Instances {
             instance_id: id,
-            backend,
+            backend: Arc::new(backend),
             info_extraction: || "data".to_string(),
             leader_strategy: LeaderStrategy::None,
             error_strategy: CommunicationErrorStrategy::Error,
-            current_info: None,
-            instances: Vec::new(),
+            state: new_state(),
         };
 
         instance.update_instance_info().unwrap();
 
-        let current = instance.get_instance_info().as_ref().unwrap();
-        assert_eq!(id, current.id);
-        assert_eq!(Unknown, current.role);
-        assert_eq!("data".to_string(), current.data);
+        validate(instance.get_instance_info(), id, Unknown);
 
         let result = instance.update_instance_info();
 
@@ -339,6 +332,13 @@ mod tests {
             Err(ConnectionError::FailedToUpdate("error".to_string())),
             result
         )
+    }
+
+    fn new_state() -> Arc<RwLock<InstancesState<String>>> {
+        Arc::new(RwLock::new(InstancesState {
+            current_info: Arc::new(None),
+            instances: Arc::new(Vec::new()),
+        }))
     }
 
     fn mock_data_for(ids: Vec<Uuid>) -> Vec<(Uuid, SystemTime, String)> {
@@ -354,17 +354,27 @@ mod tests {
             .collect()
     }
 
+    fn validate(info: Arc<Option<InstanceInfo<String>>>, id: Uuid, role: InstanceRole) {
+        match info.deref() {
+            None => panic!("Should return a valid value"),
+            Some(current) => {
+                assert_eq!(id, current.id);
+                assert_eq!(role, current.role);
+                assert_eq!("data".to_string(), current.data);
+            }
+        }
+    }
+
     fn instance_service_for(
         leader_strategy: LeaderStrategy,
     ) -> Instances<MockBackend<String>, String> {
         Instances {
             instance_id: Uuid::new_v4(),
-            backend: MockBackend::<String>::new(),
+            backend: Arc::new(MockBackend::<String>::new()),
             info_extraction: || "data".to_string(),
             leader_strategy,
             error_strategy: CommunicationErrorStrategy::Error,
-            current_info: None,
-            instances: Vec::new(),
+            state: new_state(),
         }
     }
 }
