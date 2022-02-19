@@ -39,7 +39,7 @@ fn test_api_usage() {
         .wait_for_first_update(Duration::from_millis(100))
         .unwrap();
 
-    assert_eq!(1, instances_rs.instances_count());
+    assert_eq!(1, instances_rs.instances_count().unwrap());
     assert_eq!(
         "test".to_string(),
         instances_rs.get_instance_info().unwrap().data

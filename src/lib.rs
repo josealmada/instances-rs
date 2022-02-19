@@ -54,9 +54,12 @@ where
         guard.current_info.as_ref().cloned()
     }
 
-    pub fn instances_count(&self) -> usize {
+    pub fn instances_count(&self) -> Option<usize> {
         let guard = self.state.read().unwrap();
-        guard.instances.len()
+        match guard.instances.len() {
+            0 => None,
+            len => Some(len),
+        }
     }
 
     pub fn list_active_instances(&self) -> Arc<Vec<InstanceInfo<T>>> {
@@ -193,7 +196,7 @@ mod tests {
         };
 
         assert!(instance.get_instance_info().is_none());
-        assert_eq!(0, instance.instances_count());
+        assert!(instance.instances_count().is_none());
         assert_eq!(0, instance.list_active_instances().len());
     }
 
@@ -227,7 +230,7 @@ mod tests {
 
         validate(instance.get_instance_info(), id, Unknown);
 
-        assert_eq!(1, instance.instances_count());
+        assert_eq!(1, instance.instances_count().unwrap());
 
         let instances = instance.list_active_instances();
         let single_instance = instances.deref().first().unwrap();
