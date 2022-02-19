@@ -93,7 +93,9 @@ mod tests {
         assert!(instances.get_instance_info().is_none());
 
         let _daemon = start_daemon(Duration::from_secs(5), instances.clone());
-        thread::sleep(Duration::from_millis(10));
+        instances
+            .wait_for_first_update(Duration::from_millis(10))
+            .unwrap();
 
         assert!(instances.get_instance_info().is_some());
         drop(_daemon);

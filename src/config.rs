@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::daemon::start_daemon;
 use crate::{Backend, CommunicationErrorStrategy, Instances, InstancesState, LeaderStrategy};
 
+#[derive(Default)]
 pub struct Builder<B, T>
 where
     T: Serialize + DeserializeOwned + Clone + 'static,
@@ -25,16 +26,6 @@ where
     T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
     B: Backend<T> + Send + Sync + 'static,
 {
-    pub fn new() -> Self {
-        Builder {
-            interval: None,
-            backend: None,
-            info_extractor: None,
-            leader_strategy: None,
-            error_strategy: None,
-        }
-    }
-
     pub fn with_update_interval(mut self, interval: Duration) -> Self {
         self.interval = Some(interval);
         self
@@ -103,7 +94,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Missing required update interval configuration.")]
     fn should_require_a_update_interval_config() {
-        let _ = Builder::new()
+        let _ = Builder::default()
             .with_backend(MockBackend::new())
             .with_info_extractor(|| "data".to_string())
             .with_error_strategy(CommunicationErrorStrategy::UseLastInfo)
@@ -114,7 +105,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Missing required backend configuration.")]
     fn should_require_a_backend_config() {
-        let _ = Builder::<MockBackend<String>, String>::new()
+        let _ = Builder::<MockBackend<String>, String>::default()
             .with_update_interval(Duration::from_secs(10))
             .with_info_extractor(|| "data".to_string())
             .with_error_strategy(CommunicationErrorStrategy::UseLastInfo)
@@ -125,7 +116,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Missing required info extractor configuration.")]
     fn should_require_an_info_extractor_config() {
-        let _ = Builder::<MockBackend<String>, String>::new()
+        let _ = Builder::<MockBackend<String>, String>::default()
             .with_update_interval(Duration::from_secs(10))
             .with_backend(MockBackend::new())
             .with_error_strategy(CommunicationErrorStrategy::UseLastInfo)
@@ -135,7 +126,7 @@ mod tests {
 
     #[test]
     fn should_build_an_instance() {
-        let instance = Builder::new()
+        let instance = Builder::default()
             .with_update_interval(Duration::from_secs(10))
             .with_backend(MockBackend::new())
             .with_info_extractor(|| "data".to_string())
@@ -152,7 +143,7 @@ mod tests {
 
     #[test]
     fn should_build_an_instance_with_defaults() {
-        let instance = Builder::new()
+        let instance = Builder::default()
             .with_update_interval(Duration::from_secs(10))
             .with_backend(MockBackend::new())
             .with_info_extractor(|| "data".to_string())

@@ -1,10 +1,12 @@
 extern crate core;
 
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::SystemTime;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use thiserror::Error;
 use uuid::Uuid;
 
 use crate::backends::{Backend, ConnectionError};
@@ -12,10 +14,10 @@ use crate::daemon::UpdateDaemon;
 use crate::models::{CommunicationErrorStrategy, InstanceInfo, InstanceRole, LeaderStrategy};
 use crate::InstanceRole::{Follower, Leader, Unknown};
 
-mod backends;
-mod config;
-mod daemon;
-mod models;
+pub mod backends;
+pub mod config;
+pub mod daemon;
+pub mod models;
 
 pub struct Instances<B, T>
 where
@@ -59,6 +61,18 @@ where
     pub fn list_active_instances(&self) -> Arc<Vec<InstanceInfo<T>>> {
         let guard = self.state.read().unwrap();
         guard.instances.clone()
+    }
+
+    pub fn wait_for_first_update(&self, duration: Duration) -> Result<(), InstancesError> {
+        let end = Instant::now() + duration;
+        while Instant::now() < end && self.get_instance_info().is_none() {
+            thread::sleep(Duration::from_millis(5));
+        }
+        if Instant::now() < end {
+            Ok(())
+        } else {
+            Err(InstancesError::Timeout)
+        }
     }
 
     fn update_instance_info(&self) -> Result<(), ConnectionError> {
@@ -126,6 +140,12 @@ where
             }
         }
     }
+}
+
+#[derive(Error, PartialEq, Debug)]
+pub enum InstancesError {
+    #[error(r#"BacTimeout waiting for the first update."#)]
+    Timeout,
 }
 
 #[cfg(test)]
@@ -331,6 +351,65 @@ mod tests {
             Err(ConnectionError::FailedToUpdate("error".to_string())),
             result
         )
+    }
+
+    #[test]
+    fn should_fail_waiting_on_timeout() {
+        let backend = MockBackend::<String>::new();
+
+        let instance = Instances {
+            instance_id: Uuid::new_v4(),
+            backend: Arc::new(backend),
+            info_extractor: || "data".to_string(),
+            leader_strategy: LeaderStrategy::None,
+            error_strategy: CommunicationErrorStrategy::Error,
+            state: new_state(),
+            daemon: Arc::new(Mutex::new(None)),
+        };
+
+        assert!(instance
+            .wait_for_first_update(Duration::from_millis(5))
+            .is_err());
+        assert!(instance.get_instance_info().is_none());
+    }
+
+    #[test]
+    fn should_resume_after_first_update() {
+        let mut backend = MockBackend::<String>::new();
+        let id = Uuid::new_v4();
+
+        backend
+            .expect_update_instance_info()
+            .with(eq(id), eq("data".to_string()))
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        backend
+            .expect_list_active_instances()
+            .times(1)
+            .returning(move || Ok(vec![(id, SystemTime::now(), "data".to_string())]));
+
+        let instance = Instances {
+            instance_id: id,
+            backend: Arc::new(backend),
+            info_extractor: || "data".to_string(),
+            leader_strategy: LeaderStrategy::None,
+            error_strategy: CommunicationErrorStrategy::Error,
+            state: new_state(),
+            daemon: Arc::new(Mutex::new(None)),
+        };
+
+        assert!(instance
+            .wait_for_first_update(Duration::from_millis(5))
+            .is_err());
+        assert!(instance.get_instance_info().is_none());
+
+        instance.update_instance_info().unwrap();
+
+        assert!(instance
+            .wait_for_first_update(Duration::from_millis(5))
+            .is_ok());
+        assert!(instance.get_instance_info().is_some());
     }
 
     fn new_state() -> Arc<RwLock<InstancesState<String>>> {
