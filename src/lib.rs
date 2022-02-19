@@ -1,6 +1,6 @@
 extern crate core;
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 
 use serde::de::DeserializeOwned;
@@ -8,25 +8,29 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::backends::{Backend, ConnectionError};
+use crate::daemon::UpdateDaemon;
 use crate::models::{CommunicationErrorStrategy, InstanceInfo, InstanceRole, LeaderStrategy};
 use crate::InstanceRole::{Follower, Leader, Unknown};
 
 mod backends;
+mod config;
 mod daemon;
 mod models;
 
 pub struct Instances<B, T>
 where
-    T: Serialize + DeserializeOwned + Clone + 'static,
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
     B: Backend<T> + Send + Sync + 'static,
 {
     instance_id: Uuid,
     backend: Arc<B>,
-    info_extraction: fn() -> T,
+    info_extractor: fn() -> T,
     leader_strategy: LeaderStrategy,
     error_strategy: CommunicationErrorStrategy,
 
     state: Arc<RwLock<InstancesState<T>>>,
+
+    daemon: Arc<Mutex<Option<UpdateDaemon>>>,
 }
 
 struct InstancesState<T>
@@ -39,7 +43,7 @@ where
 
 impl<B, T> Instances<B, T>
 where
-    T: Serialize + DeserializeOwned + Clone + 'static,
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
     B: Backend<T> + Send + Sync + 'static,
 {
     pub fn get_instance_info(&self) -> Option<Arc<InstanceInfo<T>>> {
@@ -58,7 +62,7 @@ where
     }
 
     fn update_instance_info(&self) -> Result<(), ConnectionError> {
-        let data = (self.info_extraction)();
+        let data = (self.info_extractor)();
         let instances = self.update_instance_info_and_retrieve(data);
 
         match instances {
@@ -142,10 +146,11 @@ mod tests {
         let instance = Instances {
             instance_id: Uuid::new_v4(),
             backend: Arc::new(backend),
-            info_extraction: || "data".to_string(),
+            info_extractor: || "data".to_string(),
             leader_strategy: LeaderStrategy::None,
             error_strategy: CommunicationErrorStrategy::Error,
             state: new_state(),
+            daemon: Arc::new(Mutex::new(None)),
         };
 
         assert!(instance.get_instance_info().is_none());
@@ -172,10 +177,11 @@ mod tests {
         let instance = Instances {
             instance_id: id,
             backend: Arc::new(backend),
-            info_extraction: || "data".to_string(),
+            info_extractor: || "data".to_string(),
             leader_strategy: LeaderStrategy::None,
             error_strategy: CommunicationErrorStrategy::Error,
             state: new_state(),
+            daemon: Arc::new(Mutex::new(None)),
         };
 
         instance.update_instance_info().unwrap();
@@ -267,10 +273,11 @@ mod tests {
         let instance = Instances {
             instance_id: id,
             backend: Arc::new(backend),
-            info_extraction: || "data".to_string(),
+            info_extractor: || "data".to_string(),
             leader_strategy: LeaderStrategy::None,
             error_strategy: CommunicationErrorStrategy::UseLastInfo,
             state: new_state(),
+            daemon: Arc::new(Mutex::new(None)),
         };
 
         instance.update_instance_info().unwrap();
@@ -307,10 +314,11 @@ mod tests {
         let instance = Instances {
             instance_id: id,
             backend: Arc::new(backend),
-            info_extraction: || "data".to_string(),
+            info_extractor: || "data".to_string(),
             leader_strategy: LeaderStrategy::None,
             error_strategy: CommunicationErrorStrategy::Error,
             state: new_state(),
+            daemon: Arc::new(Mutex::new(None)),
         };
 
         instance.update_instance_info().unwrap();
@@ -362,10 +370,11 @@ mod tests {
         Instances {
             instance_id: Uuid::new_v4(),
             backend: Arc::new(MockBackend::<String>::new()),
-            info_extraction: || "data".to_string(),
+            info_extractor: || "data".to_string(),
             leader_strategy,
             error_strategy: CommunicationErrorStrategy::Error,
             state: new_state(),
+            daemon: Arc::new(Mutex::new(None)),
         }
     }
 }

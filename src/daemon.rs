@@ -9,11 +9,11 @@ use serde::Serialize;
 
 use crate::{Backend, Instances};
 
-struct UpdateDaemon {
+pub struct UpdateDaemon {
     running: Arc<AtomicBool>,
 }
 
-fn start_daemon<B, T>(update_interval: Duration, service: Arc<Instances<B, T>>) -> UpdateDaemon
+pub fn start_daemon<B, T>(update_interval: Duration, service: Arc<Instances<B, T>>) -> UpdateDaemon
 where
     T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
     B: Backend<T> + Send + Sync + 'static,
@@ -52,7 +52,7 @@ impl Drop for UpdateDaemon {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::RwLock;
+    use std::sync::{Mutex, RwLock};
     use std::time::SystemTime;
 
     use mockall::predicate::eq;
@@ -80,13 +80,14 @@ mod tests {
         let instances = Arc::new(Instances {
             instance_id: id,
             backend: Arc::new(backend),
-            info_extraction: || "data".to_string(),
+            info_extractor: || "data".to_string(),
             leader_strategy: LeaderStrategy::None,
             error_strategy: CommunicationErrorStrategy::Error,
             state: Arc::new(RwLock::new(InstancesState {
                 current_info: None,
                 instances: Arc::new(vec![]),
             })),
+            daemon: Arc::new(Mutex::new(None)),
         });
 
         assert!(instances.get_instance_info().is_none());
@@ -117,13 +118,14 @@ mod tests {
         let instances = Arc::new(Instances {
             instance_id: id,
             backend: Arc::new(backend),
-            info_extraction: || "data".to_string(),
+            info_extractor: || "data".to_string(),
             leader_strategy: LeaderStrategy::None,
             error_strategy: CommunicationErrorStrategy::Error,
             state: Arc::new(RwLock::new(InstancesState {
                 current_info: None,
                 instances: Arc::new(vec![]),
             })),
+            daemon: Arc::new(Mutex::new(None)),
         });
 
         assert!(instances.get_instance_info().is_none());
