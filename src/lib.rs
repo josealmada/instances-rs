@@ -33,7 +33,7 @@ struct InstancesState<T>
 where
     T: Serialize + DeserializeOwned + Clone + 'static,
 {
-    current_info: Arc<Option<InstanceInfo<T>>>,
+    current_info: Option<Arc<InstanceInfo<T>>>,
     instances: Arc<Vec<InstanceInfo<T>>>,
 }
 
@@ -42,25 +42,19 @@ where
     T: Serialize + DeserializeOwned + Clone + 'static,
     B: Backend<T> + Send + Sync + 'static,
 {
-    pub fn get_instance_info(&self) -> Arc<Option<InstanceInfo<T>>> {
+    pub fn get_instance_info(&self) -> Option<Arc<InstanceInfo<T>>> {
         let guard = self.state.read().unwrap();
-        guard.current_info.clone()
+        guard.current_info.as_ref().cloned()
     }
 
-    pub fn instances_count(&self) -> Option<usize> {
+    pub fn instances_count(&self) -> usize {
         let guard = self.state.read().unwrap();
-        match guard.instances.len() {
-            0 => None,
-            len => Some(len),
-        }
+        guard.instances.len()
     }
 
-    pub fn list_active_instances(&self) -> Option<Arc<Vec<InstanceInfo<T>>>> {
+    pub fn list_active_instances(&self) -> Arc<Vec<InstanceInfo<T>>> {
         let guard = self.state.read().unwrap();
-        match guard.instances.len() {
-            0 => None,
-            _ => Some(guard.instances.clone()),
-        }
+        guard.instances.clone()
     }
 
     fn update_instance_info(&self) -> Result<(), ConnectionError> {
@@ -76,7 +70,7 @@ where
 
                 *self.state.write().unwrap() = InstancesState {
                     instances: Arc::new(instances),
-                    current_info: Arc::new(Some(current)),
+                    current_info: Some(Arc::new(current)),
                 };
                 Ok(())
             }
@@ -155,8 +149,8 @@ mod tests {
         };
 
         assert!(instance.get_instance_info().is_none());
-        assert!(instance.instances_count().is_none());
-        assert!(instance.list_active_instances().is_none());
+        assert_eq!(0, instance.instances_count());
+        assert_eq!(0, instance.list_active_instances().len());
     }
 
     #[test]
@@ -188,9 +182,9 @@ mod tests {
 
         validate(instance.get_instance_info(), id, Unknown);
 
-        assert_eq!(1, instance.instances_count().unwrap());
+        assert_eq!(1, instance.instances_count());
 
-        let instances = instance.list_active_instances().unwrap();
+        let instances = instance.list_active_instances();
         let single_instance = instances.deref().first().unwrap();
         assert_eq!(id, single_instance.id);
         assert_eq!(Unknown, single_instance.role);
@@ -333,7 +327,7 @@ mod tests {
 
     fn new_state() -> Arc<RwLock<InstancesState<String>>> {
         Arc::new(RwLock::new(InstancesState {
-            current_info: Arc::new(None),
+            current_info: None,
             instances: Arc::new(Vec::new()),
         }))
     }
@@ -351,8 +345,8 @@ mod tests {
             .collect()
     }
 
-    fn validate(info: Arc<Option<InstanceInfo<String>>>, id: Uuid, role: InstanceRole) {
-        match info.deref() {
+    fn validate(info: Option<Arc<InstanceInfo<String>>>, id: Uuid, role: InstanceRole) {
+        match info {
             None => panic!("Should return a valid value"),
             Some(current) => {
                 assert_eq!(id, current.id);
