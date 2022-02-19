@@ -1,6 +1,6 @@
 # Instances-rs
 
-[![CI](https://github.com/josealmada/instances-rs/actions/workflows/general.yml/badge.svg?branch=main)](https://github.com/josealmada/instances-rs/actions/workflows/general.yml)
+[![Rust](https://github.com/josealmada/instances-rs/actions/workflows/general.yml/badge.svg)](https://github.com/josealmada/instances-rs/actions/workflows/general.yml)
 
 ## Disclaimer
 
