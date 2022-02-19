@@ -7,6 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use thiserror::Error;
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::backends::{Backend, ConnectionError};
@@ -90,12 +91,29 @@ where
                     instances: Arc::new(instances),
                     current_info: Some(Arc::new(current)),
                 };
+
+                info!("Instances info updated successfully.");
+
                 Ok(())
             }
-            Err(error) => match self.error_strategy {
-                CommunicationErrorStrategy::Error => Err(error),
-                CommunicationErrorStrategy::UseLastInfo => Ok(()),
-            },
+            Err(error) => {
+                match self.error_strategy {
+                    CommunicationErrorStrategy::Error => {
+                        error!("Error updating the instances info. Cause: {}", error);
+
+                        *self.state.write().unwrap() = InstancesState {
+                            instances: Arc::new(vec![]),
+                            current_info: None,
+                        };
+
+                        Err(error)
+                    }
+                    CommunicationErrorStrategy::UseLastInfo => {
+                        warn!("Error updating the instances info, the old data will be used. Cause: {}", error);
+                        Ok(())
+                    }
+                }
+            }
         }
     }
 
@@ -154,6 +172,7 @@ mod tests {
     use std::time::Duration;
 
     use mockall::predicate::eq;
+    use tracing_test::traced_test;
 
     use crate::backends::MockBackend;
 
@@ -269,6 +288,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn should_return_old_info_after_update_failure() {
         let mut backend = MockBackend::<String>::new();
         let id = Uuid::new_v4();
@@ -290,15 +310,12 @@ mod tests {
             .times(1)
             .returning(move || Ok(vec![(id, SystemTime::now(), "data".to_string())]));
 
-        let instance = Instances {
-            instance_id: id,
-            backend: Arc::new(backend),
-            info_extractor: || "data".to_string(),
-            leader_strategy: LeaderStrategy::None,
-            error_strategy: CommunicationErrorStrategy::UseLastInfo,
-            state: new_state(),
-            daemon: Arc::new(Mutex::new(None)),
-        };
+        let instance = new_instance(
+            id,
+            backend,
+            LeaderStrategy::None,
+            CommunicationErrorStrategy::UseLastInfo,
+        );
 
         instance.update_instance_info().unwrap();
 
@@ -310,7 +327,8 @@ mod tests {
     }
 
     #[test]
-    fn should_return_error_after_update_failure() {
+    #[traced_test]
+    fn should_return_error_after_update_failure_and_state_reset() {
         let mut backend = MockBackend::<String>::new();
         let id = Uuid::new_v4();
 
@@ -331,15 +349,12 @@ mod tests {
             .times(1)
             .returning(move || Ok(vec![(id, SystemTime::now(), "data".to_string())]));
 
-        let instance = Instances {
-            instance_id: id,
-            backend: Arc::new(backend),
-            info_extractor: || "data".to_string(),
-            leader_strategy: LeaderStrategy::None,
-            error_strategy: CommunicationErrorStrategy::Error,
-            state: new_state(),
-            daemon: Arc::new(Mutex::new(None)),
-        };
+        let instance = new_instance(
+            id,
+            backend,
+            LeaderStrategy::None,
+            CommunicationErrorStrategy::Error,
+        );
 
         instance.update_instance_info().unwrap();
 
@@ -350,22 +365,21 @@ mod tests {
         assert_eq!(
             Err(ConnectionError::FailedToUpdate("error".to_string())),
             result
-        )
+        );
+
+        assert!(instance.get_instance_info().is_none());
     }
 
     #[test]
     fn should_fail_waiting_on_timeout() {
         let backend = MockBackend::<String>::new();
 
-        let instance = Instances {
-            instance_id: Uuid::new_v4(),
-            backend: Arc::new(backend),
-            info_extractor: || "data".to_string(),
-            leader_strategy: LeaderStrategy::None,
-            error_strategy: CommunicationErrorStrategy::Error,
-            state: new_state(),
-            daemon: Arc::new(Mutex::new(None)),
-        };
+        let instance = new_instance(
+            Uuid::new_v4(),
+            backend,
+            LeaderStrategy::None,
+            CommunicationErrorStrategy::Error,
+        );
 
         assert!(instance
             .wait_for_first_update(Duration::from_millis(5))
@@ -389,15 +403,12 @@ mod tests {
             .times(1)
             .returning(move || Ok(vec![(id, SystemTime::now(), "data".to_string())]));
 
-        let instance = Instances {
-            instance_id: id,
-            backend: Arc::new(backend),
-            info_extractor: || "data".to_string(),
-            leader_strategy: LeaderStrategy::None,
-            error_strategy: CommunicationErrorStrategy::Error,
-            state: new_state(),
-            daemon: Arc::new(Mutex::new(None)),
-        };
+        let instance = new_instance(
+            id,
+            backend,
+            LeaderStrategy::None,
+            CommunicationErrorStrategy::Error,
+        );
 
         assert!(instance
             .wait_for_first_update(Duration::from_millis(5))
@@ -410,6 +421,37 @@ mod tests {
             .wait_for_first_update(Duration::from_millis(5))
             .is_ok());
         assert!(instance.get_instance_info().is_some());
+    }
+
+    fn instance_service_for(
+        leader_strategy: LeaderStrategy,
+    ) -> Instances<MockBackend<String>, String> {
+        Instances {
+            instance_id: Uuid::new_v4(),
+            backend: Arc::new(MockBackend::<String>::new()),
+            info_extractor: || "data".to_string(),
+            leader_strategy,
+            error_strategy: CommunicationErrorStrategy::Error,
+            state: new_state(),
+            daemon: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn new_instance(
+        instance_id: Uuid,
+        backend: MockBackend<String>,
+        leader_strategy: LeaderStrategy,
+        error_strategy: CommunicationErrorStrategy,
+    ) -> Instances<MockBackend<String>, String> {
+        Instances {
+            instance_id,
+            backend: Arc::new(backend),
+            info_extractor: || "data".to_string(),
+            leader_strategy,
+            error_strategy,
+            state: new_state(),
+            daemon: Arc::new(Mutex::new(None)),
+        }
     }
 
     fn new_state() -> Arc<RwLock<InstancesState<String>>> {
@@ -440,20 +482,6 @@ mod tests {
                 assert_eq!(role, current.role);
                 assert_eq!("data".to_string(), current.data);
             }
-        }
-    }
-
-    fn instance_service_for(
-        leader_strategy: LeaderStrategy,
-    ) -> Instances<MockBackend<String>, String> {
-        Instances {
-            instance_id: Uuid::new_v4(),
-            backend: Arc::new(MockBackend::<String>::new()),
-            info_extractor: || "data".to_string(),
-            leader_strategy,
-            error_strategy: CommunicationErrorStrategy::Error,
-            state: new_state(),
-            daemon: Arc::new(Mutex::new(None)),
         }
     }
 }

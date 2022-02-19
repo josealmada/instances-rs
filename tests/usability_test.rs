@@ -36,7 +36,7 @@ fn test_api_usage() {
         .build();
 
     instances_rs
-        .wait_for_first_update(Duration::from_millis(50))
+        .wait_for_first_update(Duration::from_millis(100))
         .unwrap();
 
     assert_eq!(1, instances_rs.instances_count());

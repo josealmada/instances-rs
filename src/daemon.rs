@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use tracing::{span, Level};
 
 use crate::{Backend, Instances};
 
@@ -38,7 +39,11 @@ where
 
     thread::spawn(move || {
         while is_running.fetch_and(true, Ordering::SeqCst) {
-            service.update_instance_info().unwrap();
+            let span = span!(Level::INFO, "instances-rs_update_instance_info");
+            {
+                let _guard = span.enter();
+                service.update_instance_info().unwrap();
+            }
             ticker.recv().unwrap();
         }
     })
@@ -56,6 +61,7 @@ mod tests {
     use std::time::SystemTime;
 
     use mockall::predicate::eq;
+    use tracing_test::traced_test;
     use uuid::Uuid;
 
     use crate::backends::MockBackend;
@@ -64,6 +70,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[traced_test]
     fn should_execute_the_first_update_immediately() {
         let mut backend = MockBackend::<String>::new();
         let id = Uuid::new_v4();
@@ -94,7 +101,7 @@ mod tests {
 
         let _daemon = start_daemon(Duration::from_secs(5), instances.clone());
         instances
-            .wait_for_first_update(Duration::from_millis(10))
+            .wait_for_first_update(Duration::from_millis(100))
             .unwrap();
 
         assert!(instances.get_instance_info().is_some());
@@ -102,6 +109,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn should_execute_the_update_5_times() {
         let mut backend = MockBackend::<String>::new();
         let id = Uuid::new_v4();
